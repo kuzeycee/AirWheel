@@ -153,7 +153,7 @@ async def main():
                         if sprite_scale > 0.15:
                             sprite_w = max(int(sprite_texture.get_width() * sprite_scale), 1)
                             sprite_h = max(int(sprite_texture.get_height() * sprite_scale), 1)
-                            scaled_sprite = pg.transform.scale(sprite_texture, (sprite_w, sprite_h))
+                            scaled_sprite = pg.transform.smoothscale(sprite_texture, (sprite_w, sprite_h))
                             sprite_x = horizontal + side * world_offset * scale
                             roadside_sprites.append((scaled_sprite, int(sprite_x - sprite_w / 2), int(vertical - sprite_h)))
 
@@ -161,6 +161,12 @@ async def main():
             screen.blit(scaled_sprite, (sprite_left, sprite_top))
 
         screen.blit(car_sprite, (100, 120))
+
+        speed_kmh = int(abs(car.velocity) * 3.6)
+        distance_m = int(max(car.x, 0))
+        for i, hud_line in enumerate([f"{speed_kmh} km/h", f"{distance_m} m"]):
+            hud_surface = hud_font.render(hud_line, True, (255,255,255))
+            screen.blit(hud_surface, (320 - hud_surface.get_width() - 6, 6 + i*14))
 
         if use_hand_control and not hand_calibrated:
             hud_text = "Raise both hands to calibrate steering" if hand_calibration_start is None else "Calibrating... hold straight"
