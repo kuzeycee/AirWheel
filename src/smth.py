@@ -16,8 +16,8 @@ HAND_ANGLE_SMOOTHING = 0.3
 HAND_CALIBRATION_SECONDS = 1.5
 HAND_ANGLE_TO_RADIANS = 60
 HAND_AUTO_DRIVE_MAX_SPEED = 17
-HAND_THROTTLE_DEADZONE = 0.05
-HAND_THROTTLE_SENSITIVITY = 0.3
+HAND_THROTTLE_DEADZONE = 0.03
+HAND_THROTTLE_SENSITIVITY = 0.15
 ENGINE_MAX_SPEED = 10
 ENGINE_PITCH_STEPS = 10
 ENGINE_PITCH_MIN = 0.8
@@ -143,6 +143,7 @@ async def main():
     hand_landmarker = None
     hand_start_time = time.time()
     hand_smoothed_angle = 0.0
+    hand_smoothed_distance = 0.0
     hand_baseline_angle = 0.0
     hand_baseline_distance = 0.0
     hand_throttle = 0.0
@@ -194,12 +195,15 @@ async def main():
                     wrist_points[1][0] - wrist_points[0][0],
                     wrist_points[1][1] - wrist_points[0][1],
                 )
+                if hand_smoothed_distance == 0.0:
+                    hand_smoothed_distance = hand_distance
+                hand_smoothed_distance += HAND_ANGLE_SMOOTHING * (hand_distance - hand_smoothed_distance)
 
                 if not hand_calibrated:
                     if hand_calibration_start is None:
                         hand_calibration_start = time.time()
                     hand_calibration_samples.append(hand_smoothed_angle)
-                    hand_distance_calibration_samples.append(hand_distance)
+                    hand_distance_calibration_samples.append(hand_smoothed_distance)
                     if time.time() - hand_calibration_start >= HAND_CALIBRATION_SECONDS:
                         hand_baseline_angle = sum(hand_calibration_samples) / len(hand_calibration_samples)
                         hand_baseline_distance = sum(hand_distance_calibration_samples) / len(hand_distance_calibration_samples)
@@ -208,7 +212,7 @@ async def main():
                     hand_relative_angle = hand_smoothed_angle - hand_baseline_angle
                     car.angle = max(-0.9, min(0.9, hand_relative_angle / HAND_ANGLE_TO_RADIANS))
 
-                    lean = hand_distance / hand_baseline_distance - 1.0
+                    lean = 1.0 - (hand_smoothed_distance / hand_baseline_distance)
                     if abs(lean) < HAND_THROTTLE_DEADZONE:
                         hand_throttle = 0.0
                     else:
@@ -285,13 +289,22 @@ class Player():
         self.acceleration = 0
 
     def controls(self, delta, hand_throttle=None):
+        if hand_throttle is not None:
+            # hand mode: throttle maps straight to acceleration for instant response,
+            # and the car never rolls backwards no matter how noisy the signal is.
+            self.acceleration = 12 * hand_throttle
+            self.velocity += -0.4*self.velocity*delta
+            self.velocity += self.acceleration*delta
+            self.velocity = max(0, min(HAND_AUTO_DRIVE_MAX_SPEED, self.velocity))
+            self.x += self.velocity*delta*math.cos(self.angle)
+            self.y += self.velocity*math.sin(self.angle)*delta*100
+            return
+
         pressed_keys = pg.key.get_pressed()
         self.acceleration += -0.5*self.acceleration*delta
         self.velocity += -0.5*self.velocity*delta
 
-        if hand_throttle is not None:
-            self.acceleration += 20*delta*hand_throttle
-        elif pressed_keys[pg.K_w] or pressed_keys[pg.K_UP]:
+        if pressed_keys[pg.K_w] or pressed_keys[pg.K_UP]:
             if self.velocity > -1:
                 self.acceleration += 20*delta
             else:
@@ -307,8 +320,7 @@ class Player():
             self.angle -= delta*self.velocity/10
         elif pressed_keys[pg.K_d] or pressed_keys[pg.K_RIGHT]:
             self.angle += delta*self.velocity/10
-        max_speed = HAND_AUTO_DRIVE_MAX_SPEED if hand_throttle is not None else 20
-        self.velocity = max(-30,min(max_speed,self.velocity))
+        self.velocity = max(-30,min(20,self.velocity))
         self.velocity += self.acceleration*delta
         self.x += self.velocity*delta*math.cos(self.angle)
         self.y += self.velocity*math.sin(self.angle)*delta*100
