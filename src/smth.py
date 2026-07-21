@@ -1,13 +1,48 @@
 import asyncio
+import os
 import pygame as pg
+import numpy as np
 import sys, math, random, time
 import cv2
 import mediapipe as mp
 import Main as airwheel
 
+ASSET_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets")
+
+def asset_path(name):
+    return os.path.join(ASSET_DIR, name)
+
 HAND_ANGLE_SMOOTHING = 0.3
 HAND_CALIBRATION_SECONDS = 1.5
 HAND_ANGLE_TO_RADIANS = 60
+ENGINE_MAX_SPEED = 40
+ENGINE_PITCH_STEPS = 10
+ENGINE_PITCH_MIN = 0.8
+ENGINE_PITCH_MAX = 1.8
+
+def make_seamless_loop(samples, fade_seconds=0.05, sample_rate=44100):
+    fade_len = min(int(sample_rate * fade_seconds), len(samples) // 4)
+    if fade_len <= 0:
+        return samples
+    fade_in = np.linspace(0, 1, fade_len)[:, None]
+    fade_out = 1 - fade_in
+    head = samples[:fade_len].astype(np.float32)
+    tail = samples[-fade_len:].astype(np.float32)
+    blended = (head * fade_in + tail * fade_out).astype(samples.dtype)
+    looped = samples[:-fade_len].copy()
+    looped[:fade_len] = blended
+    return looped
+
+def build_engine_pitch_variants(base_sound):
+    samples = pg.sndarray.array(base_sound)
+    variants = []
+    for i in range(ENGINE_PITCH_STEPS):
+        pitch = ENGINE_PITCH_MIN + (ENGINE_PITCH_MAX - ENGINE_PITCH_MIN) * i / (ENGINE_PITCH_STEPS - 1)
+        stretched_length = int(len(samples) / pitch)
+        indices = np.clip((np.arange(stretched_length) * pitch).astype(np.int64), 0, len(samples) - 1)
+        stretched = samples[indices]
+        variants.append(pg.sndarray.make_sound(make_seamless_loop(stretched)))
+    return variants
 
 async def main():
     screen_size = [320,180]
@@ -20,12 +55,24 @@ async def main():
 
     clock = pg.time.Clock()
     clock.tick(); pg.time.wait(16)
-    road_texture = pg.image.load("assets/road.png").convert()
-    mountains_texture = pg.image.load("assets/mountains.png").convert()
-    car_sprite = pg.image.load("assets/car.png").convert()
+    road_texture = pg.image.load(asset_path("road.png")).convert()
+    mountains_texture = pg.image.load(asset_path("mountains.png")).convert()
+    car_sprite = pg.image.load(asset_path("car.png")).convert()
     car_sprite.set_colorkey((255,0,255))
-    tree_texture = pg.image.load("assets/tree.png").convert_alpha()
-    grass_texture = pg.image.load("assets/grass.png").convert_alpha()
+    tree_texture = pg.image.load(asset_path("tree.png")).convert_alpha()
+    grass_texture = pg.image.load(asset_path("grass.png")).convert_alpha()
+
+    engine_channel = None
+    engine_variants = None
+    engine_pitch_bucket = 0
+    try:
+        pg.mixer.init()
+        engine_variants = build_engine_pitch_variants(pg.mixer.Sound(asset_path("engine_idle.wav")))
+        engine_channel = pg.mixer.Channel(0)
+        engine_channel.play(engine_variants[0], loops=-1)
+    except pg.error:
+        pass
+
     TREE_SPACING = 18
     GRASS_SPACING = 6
     # the road texture is blitted 500*scale wide but centered using 320*scale,
@@ -47,6 +94,7 @@ async def main():
 
     pg.font.init()
     hud_font = pg.font.SysFont(None, 16)
+    title_font = pg.font.SysFont(None, 26, bold=True)
 
     use_hand_control = None
     while use_hand_control is None:
@@ -60,9 +108,22 @@ async def main():
                 elif event.key == pg.K_2:
                     use_hand_control = True
         screen.fill((20,20,30))
-        screen.blit(hud_font.render("How do you want to drive?", True, (255,255,255)), (60,60))
-        screen.blit(hud_font.render("Press 1: Keyboard", True, (255,255,0)), (70,85))
-        screen.blit(hud_font.render("Press 2: Hand steering", True, (255,255,0)), (70,100))
+
+        flicker = 0.6 + 0.4*math.sin(time.time()*10) + 0.15*math.sin(time.time()*23.7)
+        flicker = max(0.0, min(1.0, flicker))
+        fire_color = (255, int(90 + 130*flicker), int(25*flicker))
+        title_text = "How do you want to drive?"
+        title_surface = title_font.render(title_text, True, fire_color)
+        title_x = 160 - title_surface.get_width()//2
+        for dx, dy in ((-1,0),(1,0),(0,-1),(0,1)):
+            glow_surface = title_font.render(title_text, True, (120,20,0))
+            screen.blit(glow_surface, (title_x+dx, 45+dy))
+        screen.blit(title_surface, (title_x, 45))
+
+        for i, line in enumerate(["Press 1: Keyboard", "Press 2: Hand steering"]):
+            line_surface = hud_font.render(line, True, (255,255,0))
+            screen.blit(line_surface, (160 - line_surface.get_width()//2, 95 + i*15))
+
         pg.display.update()
         await asyncio.sleep(0)
 
@@ -87,6 +148,14 @@ async def main():
 
         delta = clock.tick()/1000 + 0.00001
         car.controls(delta)
+
+        if engine_channel:
+            speed_ratio = min(abs(car.velocity) / ENGINE_MAX_SPEED, 1.0)
+            engine_channel.set_volume(0.2 + 0.3 * speed_ratio)
+            pitch_bucket = int(speed_ratio * (ENGINE_PITCH_STEPS - 1))
+            if pitch_bucket != engine_pitch_bucket:
+                engine_pitch_bucket = pitch_bucket
+                engine_channel.play(engine_variants[engine_pitch_bucket], loops=-1)
 
         hand_ok = False
         if use_hand_control:
