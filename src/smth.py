@@ -15,7 +15,10 @@ def asset_path(name):
 HAND_ANGLE_SMOOTHING = 0.3
 HAND_CALIBRATION_SECONDS = 1.5
 HAND_ANGLE_TO_RADIANS = 60
-ENGINE_MAX_SPEED = 40
+HAND_AUTO_DRIVE_MAX_SPEED = 17
+HAND_THROTTLE_DEADZONE = 0.05
+HAND_THROTTLE_SENSITIVITY = 0.3
+ENGINE_MAX_SPEED = 10
 ENGINE_PITCH_STEPS = 10
 ENGINE_PITCH_MIN = 0.8
 ENGINE_PITCH_MAX = 1.8
@@ -73,10 +76,14 @@ async def main():
     except pg.error:
         pass
 
+    try:
+        pg.mixer.music.load(asset_path("menu_music.mp3"))
+        pg.mixer.music.play(loops=-1)
+    except pg.error:
+        pass
+
     TREE_SPACING = 18
     GRASS_SPACING = 6
-    # the road texture is blitted 500*scale wide but centered using 320*scale,
-    # so it actually reaches 160*scale left of `horizontal` and 340*scale right of it
     LEFT_ROAD_EDGE = 160
     RIGHT_ROAD_EDGE = 340
 
@@ -127,14 +134,22 @@ async def main():
         pg.display.update()
         await asyncio.sleep(0)
 
+    try:
+        pg.mixer.music.stop()
+    except pg.error:
+        pass
+
     hand_cap = None
     hand_landmarker = None
     hand_start_time = time.time()
     hand_smoothed_angle = 0.0
     hand_baseline_angle = 0.0
+    hand_baseline_distance = 0.0
+    hand_throttle = 0.0
     hand_calibrated = False
     hand_calibration_start = None
     hand_calibration_samples = []
+    hand_distance_calibration_samples = []
 
     if use_hand_control:
         airwheel.ensure_model()
@@ -147,7 +162,7 @@ async def main():
     while running:
 
         delta = clock.tick()/1000 + 0.00001
-        car.controls(delta)
+        car.controls(delta, hand_throttle if use_hand_control else None)
 
         if engine_channel:
             speed_ratio = min(abs(car.velocity) / ENGINE_MAX_SPEED, 1.0)
@@ -175,17 +190,29 @@ async def main():
                 )
                 raw_angle = airwheel.steering_angle(wrist_points[0], wrist_points[1])
                 hand_smoothed_angle += HAND_ANGLE_SMOOTHING * (raw_angle - hand_smoothed_angle)
+                hand_distance = math.hypot(
+                    wrist_points[1][0] - wrist_points[0][0],
+                    wrist_points[1][1] - wrist_points[0][1],
+                )
 
                 if not hand_calibrated:
                     if hand_calibration_start is None:
                         hand_calibration_start = time.time()
                     hand_calibration_samples.append(hand_smoothed_angle)
+                    hand_distance_calibration_samples.append(hand_distance)
                     if time.time() - hand_calibration_start >= HAND_CALIBRATION_SECONDS:
                         hand_baseline_angle = sum(hand_calibration_samples) / len(hand_calibration_samples)
+                        hand_baseline_distance = sum(hand_distance_calibration_samples) / len(hand_distance_calibration_samples)
                         hand_calibrated = True
                 else:
                     hand_relative_angle = hand_smoothed_angle - hand_baseline_angle
                     car.angle = max(-0.9, min(0.9, hand_relative_angle / HAND_ANGLE_TO_RADIANS))
+
+                    lean = hand_distance / hand_baseline_distance - 1.0
+                    if abs(lean) < HAND_THROTTLE_DEADZONE:
+                        hand_throttle = 0.0
+                    else:
+                        hand_throttle = max(-1.0, min(1.0, lean / HAND_THROTTLE_SENSITIVITY))
 
         for event in pg.event.get():
             if event.type == pg.QUIT: running = 0
@@ -257,12 +284,14 @@ class Player():
         self.velocity = 0
         self.acceleration = 0
 
-    def controls(self, delta):
+    def controls(self, delta, hand_throttle=None):
         pressed_keys = pg.key.get_pressed()
         self.acceleration += -0.5*self.acceleration*delta
         self.velocity += -0.5*self.velocity*delta
 
-        if pressed_keys[pg.K_w] or pressed_keys[pg.K_UP]:
+        if hand_throttle is not None:
+            self.acceleration += 20*delta*hand_throttle
+        elif pressed_keys[pg.K_w] or pressed_keys[pg.K_UP]:
             if self.velocity > -1:
                 self.acceleration += 20*delta
             else:
@@ -278,7 +307,8 @@ class Player():
             self.angle -= delta*self.velocity/10
         elif pressed_keys[pg.K_d] or pressed_keys[pg.K_RIGHT]:
             self.angle += delta*self.velocity/10
-        self.velocity = max(-30,min(40,self.velocity))
+        max_speed = HAND_AUTO_DRIVE_MAX_SPEED if hand_throttle is not None else 20
+        self.velocity = max(-30,min(max_speed,self.velocity))
         self.velocity += self.acceleration*delta
         self.x += self.velocity*delta*math.cos(self.angle)
         self.y += self.velocity*math.sin(self.angle)*delta*100
