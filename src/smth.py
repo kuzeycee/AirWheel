@@ -58,39 +58,78 @@ def build_horn_sound():
         samples = np.column_stack([samples, samples])
     return pg.sndarray.make_sound(make_seamless_loop(samples, sample_rate=freq))
 
-def build_wheel_surface(radius=20):
-    size = radius * 2 + 4
+def build_wheel_surface(radius=22):
+    size = radius * 2 + 6
     surface = pg.Surface((size, size), pg.SRCALPHA)
     center = size // 2
-    pg.draw.circle(surface, (30, 30, 35), (center, center), radius, 5)
-    pg.draw.circle(surface, (200, 60, 60), (center, center), radius - 5, 2)
+    c = (center, center)
+    # chunky rubber rim with a lighter inner edge so it reads as a 3D ring
+    pg.draw.circle(surface, (18, 18, 22), c, radius, 6)
+    pg.draw.circle(surface, (55, 55, 62), c, radius - 1, 2)
+    pg.draw.circle(surface, (90, 45, 45), c, radius - 5, 2)
+    # top highlight arc, like light hitting the wheel
+    pg.draw.arc(surface, (140, 140, 150), (center - radius + 2, center - radius + 2,
+                (radius - 2) * 2, (radius - 2) * 2), math.radians(35), math.radians(145), 2)
     # three spokes like a real wheel
     for ang in (math.pi/2, math.pi/2 + 2*math.pi/3, math.pi/2 + 4*math.pi/3):
-        ex = center + int((radius - 4) * math.cos(ang))
-        ey = center + int((radius - 4) * math.sin(ang))
-        pg.draw.line(surface, (30, 30, 35), (center, center), (ex, ey), 3)
-    pg.draw.circle(surface, (30, 30, 35), (center, center), 4)
+        ex = center + int((radius - 6) * math.cos(ang))
+        ey = center + int((radius - 6) * math.sin(ang))
+        pg.draw.line(surface, (35, 35, 40), c, (ex, ey), 4)
+        pg.draw.line(surface, (70, 70, 78), c, (ex, ey), 1)
+    # centre hub with a red horn button
+    pg.draw.circle(surface, (30, 30, 35), c, 6)
+    pg.draw.circle(surface, (170, 45, 45), c, 4)
+    pg.draw.circle(surface, (230, 120, 120), (center - 1, center - 1), 1)
     return surface
 
+def draw_pedal(screen, x, top, accent, pressed):
+    # a foot pedal seen slightly from the side: hinge at the top, a ridged
+    # foot-plate below it that dips and lights up when it is pushed.
+    dip = 3 if pressed else 0
+    plate_top = top + 4 + dip
+    plate_bot = top + 18
+    # hinge bracket + arm connecting the pedal to the dash
+    pg.draw.rect(screen, (40, 40, 46), (x + 2, top, 6, 3))
+    pg.draw.line(screen, (60, 60, 68), (x + 5, top + 2), (x + 5, plate_top), 2)
+    # foot-plate as a little parallelogram for a 3D tilt
+    plate = [(x, plate_top), (x + 10, plate_top - 1),
+             (x + 11, plate_bot), (x + 1, plate_bot + 1)]
+    body = accent if pressed else tuple(int(v * 0.35) for v in accent)
+    pg.draw.polygon(screen, body, plate)
+    pg.draw.polygon(screen, (15, 15, 18), plate, 1)
+    # grip ridges across the plate
+    for i in range(3):
+        ry = plate_top + 3 + i * 4
+        shade = (235, 235, 240) if pressed else (95, 95, 102)
+        pg.draw.line(screen, shade, (x + 2, ry), (x + 9, ry), 1)
+    if pressed:  # soft glow when the pedal is engaged
+        glow = pg.Surface((14, 22), pg.SRCALPHA)
+        pg.draw.rect(glow, (*accent, 70), (0, 0, 14, 22), border_radius=3)
+        screen.blit(glow, (x - 2, plate_top - 2))
+
 def draw_dashboard(screen, wheel_surface, car, font):
+    # dark dashboard panel behind the controls
+    panel = pg.Surface((92, 46), pg.SRCALPHA)
+    pg.draw.rect(panel, (24, 24, 30, 225), (0, 0, 92, 46), border_radius=6)
+    pg.draw.rect(panel, (70, 70, 80, 255), (0, 0, 92, 46), 1, border_radius=6)
+    screen.blit(panel, (228, 132))
+
+    # brake (left, wider) and gas (right) pedals
+    draw_pedal(screen, 234, 138, (235, 60, 60), car.input_state == "brake")
+    draw_pedal(screen, 250, 138, (70, 220, 100), car.input_state == "gas")
+
     # steering wheel, rotates the way the player is steering
     wheel_deg = -car.angle * 120
     rotated = pg.transform.rotate(wheel_surface, wheel_deg)
-    wheel_pos = (285 - rotated.get_width() // 2, 150 - rotated.get_height() // 2)
+    wheel_pos = (296 - rotated.get_width() // 2, 155 - rotated.get_height() // 2)
     screen.blit(rotated, wheel_pos)
 
-    gas_on = car.input_state == "gas"
-    brake_on = car.input_state == "brake"
-    gas_color = (60, 220, 90) if gas_on else (40, 60, 45)
-    brake_color = (230, 60, 60) if brake_on else (70, 45, 45)
-    pg.draw.rect(screen, gas_color, (250, 138, 10, 10))
-    pg.draw.rect(screen, brake_color, (250, 152, 10, 10))
-    screen.blit(font.render("G", True, (0, 0, 0)), (252, 138))
-    screen.blit(font.render("F", True, (0, 0, 0)), (252, 152))
-
+    # gear indicator on a small display
     speed = abs(car.velocity) * 3.6
     gear = "N" if speed < 1 else "1" if speed < 25 else "2" if speed < 45 else "3"
-    screen.blit(font.render(gear, True, (255, 255, 255)), (283, 168))
+    pg.draw.rect(screen, (10, 30, 15), (270, 137, 12, 12), border_radius=2)
+    pg.draw.rect(screen, (60, 90, 70), (270, 137, 12, 12), 1, border_radius=2)
+    screen.blit(font.render(gear, True, (120, 255, 150)), (273, 137))
 
 async def main():
     screen_size = [320,180]
