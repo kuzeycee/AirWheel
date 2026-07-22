@@ -55,6 +55,17 @@ def steering_angle(left_point, right_point):
     return math.degrees(math.atan2(dy, dx))
 
 
+def is_fist(landmarks):
+    wrist = landmarks[0]
+    folded = 0
+    for tip, mcp in ((8, 5), (12, 9), (16, 13), (20, 17)):
+        tip_d = math.hypot(landmarks[tip].x - wrist.x, landmarks[tip].y - wrist.y)
+        mcp_d = math.hypot(landmarks[mcp].x - wrist.x, landmarks[mcp].y - wrist.y)
+        if tip_d < mcp_d:
+            folded += 1
+    return folded >= 3
+
+
 def decide_direction(angle, current_direction):
     if current_direction == "right" and angle >= EXIT_TURN_DEG:
         return "right"

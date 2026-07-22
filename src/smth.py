@@ -47,6 +47,53 @@ def build_engine_pitch_variants(base_sound):
         variants.append(pg.sndarray.make_sound(make_seamless_loop(stretched)))
     return variants
 
+def build_horn_sound():
+    freq, _size, channels = pg.mixer.get_init()
+    n = int(freq * 0.5)
+    t = np.arange(n) / freq
+    wave = (np.sin(2*np.pi*440*t) + 0.7*np.sin(2*np.pi*554*t) + 0.25*np.sin(2*np.pi*880*t))
+    wave /= np.max(np.abs(wave))
+    samples = (wave * (np.iinfo(np.int16).max * 0.5)).astype(np.int16)
+    if channels == 2:
+        samples = np.column_stack([samples, samples])
+    return pg.sndarray.make_sound(make_seamless_loop(samples, sample_rate=freq))
+
+def build_wheel_surface(radius=20):
+    size = radius * 2 + 4
+    surface = pg.Surface((size, size), pg.SRCALPHA)
+    center = size // 2
+    pg.draw.circle(surface, (30, 30, 35), (center, center), radius, 5)
+    pg.draw.circle(surface, (200, 60, 60), (center, center), radius - 5, 2)
+    # three spokes like a real wheel
+    for ang in (math.pi/2, math.pi/2 + 2*math.pi/3, math.pi/2 + 4*math.pi/3):
+        ex = center + int((radius - 4) * math.cos(ang))
+        ey = center + int((radius - 4) * math.sin(ang))
+        pg.draw.line(surface, (30, 30, 35), (center, center), (ex, ey), 3)
+    pg.draw.circle(surface, (30, 30, 35), (center, center), 4)
+    return surface
+
+def draw_dashboard(screen, wheel_surface, car, font):
+    # steering wheel, rotates the way the player is steering
+    wheel_deg = -car.angle * 120
+    rotated = pg.transform.rotate(wheel_surface, wheel_deg)
+    wheel_pos = (285 - rotated.get_width() // 2, 150 - rotated.get_height() // 2)
+    screen.blit(rotated, wheel_pos)
+
+    # gas / brake lights
+    gas_on = car.input_state == "gas"
+    brake_on = car.input_state == "brake"
+    gas_color = (60, 220, 90) if gas_on else (40, 60, 45)
+    brake_color = (230, 60, 60) if brake_on else (70, 45, 45)
+    pg.draw.rect(screen, gas_color, (250, 138, 10, 10))
+    pg.draw.rect(screen, brake_color, (250, 152, 10, 10))
+    screen.blit(font.render("G", True, (0, 0, 0)), (252, 138))
+    screen.blit(font.render("F", True, (0, 0, 0)), (252, 152))
+
+    # gear indicator
+    speed = abs(car.velocity) * 3.6
+    gear = "N" if speed < 1 else "1" if speed < 25 else "2" if speed < 45 else "3"
+    screen.blit(font.render(gear, True, (255, 255, 255)), (283, 168))
+
 async def main():
     screen_size = [320,180]
 
@@ -68,11 +115,15 @@ async def main():
     engine_channel = None
     engine_variants = None
     engine_pitch_bucket = 0
+    horn_channel = None
+    horn_sound = None
     try:
         pg.mixer.init()
         engine_variants = build_engine_pitch_variants(pg.mixer.Sound(asset_path("engine_idle.wav")))
         engine_channel = pg.mixer.Channel(0)
         engine_channel.play(engine_variants[0], loops=-1)
+        horn_sound = build_horn_sound()
+        horn_channel = pg.mixer.Channel(1)
     except pg.error:
         pass
 
@@ -102,6 +153,7 @@ async def main():
     pg.font.init()
     hud_font = pg.font.SysFont(None, 16)
     title_font = pg.font.SysFont(None, 26, bold=True)
+    wheel_surface = build_wheel_surface()
 
     use_hand_control = None
     while use_hand_control is None:
@@ -173,6 +225,7 @@ async def main():
                 engine_pitch_bucket = pitch_bucket
                 engine_channel.play(engine_variants[engine_pitch_bucket], loops=-1)
 
+        horn_on = False
         hand_ok = False
         if use_hand_control:
             hand_ok, hand_frame = hand_cap.read()
@@ -185,6 +238,7 @@ async def main():
             hand_result = hand_landmarker.detect_for_video(mp_image, timestamp_ms)
 
             if hand_result.hand_landmarks and len(hand_result.hand_landmarks) == 2:
+                horn_on = any(airwheel.is_fist(lm) for lm in hand_result.hand_landmarks)
                 wrist_points = sorted(
                     (int(landmarks[0].x * hf_w), int(landmarks[0].y * hf_h))
                     for landmarks in hand_result.hand_landmarks
@@ -217,6 +271,12 @@ async def main():
                         hand_throttle = 0.0
                     else:
                         hand_throttle = max(-1.0, min(1.0, lean / HAND_THROTTLE_SENSITIVITY))
+
+        if horn_channel:
+            if horn_on and not horn_channel.get_busy():
+                horn_channel.play(horn_sound, loops=-1)
+            elif not horn_on and horn_channel.get_busy():
+                horn_channel.stop()
 
         for event in pg.event.get():
             if event.type == pg.QUIT: running = 0
@@ -268,6 +328,8 @@ async def main():
             hud_surface = hud_font.render(hud_line, True, (255,255,255))
             screen.blit(hud_surface, (320 - hud_surface.get_width() - 6, 6 + i*14))
 
+        draw_dashboard(screen, wheel_surface, car, hud_font)
+
         if use_hand_control and not hand_calibrated:
             hud_text = "Raise both hands to calibrate steering" if hand_calibration_start is None else "Calibrating... hold straight"
             screen.blit(hud_font.render(hud_text, True, (255,255,0)), (10, 10))
@@ -287,11 +349,18 @@ class Player():
         self.angle = 0
         self.velocity = 0
         self.acceleration = 0
+        self.input_state = "coast"
 
     def controls(self, delta, hand_throttle=None):
         if hand_throttle is not None:
             # hand mode: throttle maps straight to acceleration for instant response,
             # and the car never rolls backwards no matter how noisy the signal is.
+            if hand_throttle > 0.05:
+                self.input_state = "gas"
+            elif hand_throttle < -0.05:
+                self.input_state = "brake"
+            else:
+                self.input_state = "coast"
             self.acceleration = 12 * hand_throttle
             self.velocity += -0.4*self.velocity*delta
             self.velocity += self.acceleration*delta
@@ -303,6 +372,13 @@ class Player():
         pressed_keys = pg.key.get_pressed()
         self.acceleration += -0.5*self.acceleration*delta
         self.velocity += -0.5*self.velocity*delta
+
+        if pressed_keys[pg.K_s] or pressed_keys[pg.K_DOWN]:
+            self.input_state = "brake"
+        elif pressed_keys[pg.K_w] or pressed_keys[pg.K_UP]:
+            self.input_state = "gas"
+        else:
+            self.input_state = "coast"
 
         if pressed_keys[pg.K_w] or pressed_keys[pg.K_UP]:
             if self.velocity > -1:
