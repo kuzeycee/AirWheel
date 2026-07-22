@@ -194,7 +194,6 @@ def main():
                 if accelerating:
                     pyautogui.keyUp("up")
                     accelerating = False
-            # else: brief single-frame miss, keep previous direction/keys frozen
 
             fps = 1 / max(now - prev_time, 1e-6)
             prev_time = now

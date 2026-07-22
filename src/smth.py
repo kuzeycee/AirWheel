@@ -130,7 +130,7 @@ def draw_dashboard(screen, wheel_surface, car, font):
     screen.blit(font.render(gear, True, (120, 255, 150)), (273, 137))
 
 async def main():
-    SS = 2  # supersample: dünyayı 2x çözünürlükte çiz -> daha keskin görüntü
+    SS = 2
     screen_size = [320*SS, 180*SS]
 
     if sys.platform == "emscripten":
@@ -148,7 +148,6 @@ async def main():
     tree_texture = pg.image.load(asset_path("tree.png")).convert_alpha()
     grass_texture = pg.image.load(asset_path("grass.png")).convert_alpha()
 
-    # HUD / gösterge paneli / menü bu 320x180 katmana çizilip ekrana ölçeklenir (o sabitleri değiştirmemek için)
     ui = pg.Surface((320, 180), pg.SRCALPHA)
     mountains_texture = pg.transform.scale(mountains_texture, (mountains_texture.get_width()*SS, mountains_texture.get_height()*SS))
     car_big = pg.transform.scale(car_sprite, (car_sprite.get_width()*SS, car_sprite.get_height()*SS))
@@ -253,8 +252,8 @@ async def main():
         hand_landmarker = airwheel.create_landmarker()
 
     car = Player()
-    obstacle_x = car.x + 80                    # engel ~80 birim ileride, yolda sabit durur
-    obstacle_lane = random.choice([-1, 0, 1])  # -1 sol, 0 orta, 1 sağ şerit
+    obstacle_x = car.x + 80
+    obstacle_lane = random.choice([-1, 0, 1])
     running = 1
 
     while running:
@@ -332,14 +331,14 @@ async def main():
         vertical, draw_distance= 180*SS, 1
         car.z = 100+40*math.sin(car.x/13)-60*math.sin(car.x/7)
         roadside_sprites = []
-        obstacle_screen = None  # engelin bu karedeki ekran yeri (yola gelince dolar)
+        obstacle_screen = None
 
         while draw_distance < 120:
             last_vertical = vertical
             while vertical >= last_vertical and draw_distance < 120:
                 draw_distance += draw_distance / 150
                 x = car.x + draw_distance
-                scale = SS /draw_distance   # SS ile ölçek büyür -> tüm *scale boyutları yüksek çözünürlükte
+                scale = SS /draw_distance
                 z = 100 + 40 * math.sin(x / 13) - 60 * math.sin(x / 7) - car.z
                 vertical = int(60*SS+120*scale + z*scale)
                 if draw_distance < 120:
@@ -363,13 +362,11 @@ async def main():
                             sprite_x = horizontal + side * world_offset * scale
                             roadside_sprites.append((scaled_sprite, int(sprite_x - sprite_w / 2), int(vertical - sprite_h)))
 
-                    # engel: bu, engeli geçen ilk (en yakın) yol dilimi mi? konumunu kaydet
                     if obstacle_screen is None and x >= obstacle_x:
                         obs_w = max(int(120 * scale), 2)
                         obs_x = horizontal + obstacle_lane * 55 * scale
                         obstacle_screen = (int(obs_x - obs_w / 2), int(vertical - obs_w), obs_w)
 
-        # yol dışı tespiti: arabanın altındaki noktalar tamamen yeşilse çimdeyiz
         car.off_road = True
         for sy in (150*SS, 158*SS, 166*SS):
             px = screen.get_at((132*SS, sy))
@@ -386,14 +383,13 @@ async def main():
             scaled_obstacle.set_colorkey((255,0,255))
             screen.blit(scaled_obstacle, (obs_left, obs_top))
 
-        # engeli geçtiysek (arabanın gerisinde kaldı) ileride yenisini üret
         if car.x > obstacle_x:
             obstacle_x = car.x + random.randint(60, 110)
             obstacle_lane = random.choice([-1, 0, 1])
 
         screen.blit(car_big, (100*SS, 120*SS))
 
-        ui.fill((0, 0, 0, 0))   # HUD/panel katmanını temizle (şeffaf)
+        ui.fill((0, 0, 0, 0))
         speed_kmh = int(abs(car.velocity) * 3.6)
         distance_m = int(max(car.x, 0))
         for i, hud_line in enumerate([f"{speed_kmh} km/h", f"{distance_m} m"]):
@@ -427,10 +423,8 @@ class Player():
 
     def controls(self, delta, hand_throttle=None):
         if self.off_road:
-            self.velocity += -3.0*self.velocity*delta  # çimde ekstra sürtünme, arabayı yavaşlatır
+            self.velocity += -3.0*self.velocity*delta
         if hand_throttle is not None:
-            # hand mode: throttle maps straight to acceleration for instant response,
-            # and the car never rolls backwards no matter how noisy the signal is.
             if hand_throttle > 0.05:
                 self.input_state = "gas"
             elif hand_throttle < -0.05:
@@ -465,11 +459,11 @@ class Player():
         elif pressed_keys[pg.K_s] or pressed_keys[pg.K_DOWN]:
             if self.velocity > 0:
                 self.acceleration = 0
-                self.velocity += -4*self.velocity*delta - 5*delta  # güçlü fren, hızı sıfıra çeker
+                self.velocity += -4*self.velocity*delta - 5*delta
                 if self.velocity < 0:
                     self.velocity = 0
             else:
-                self.acceleration -= delta  # durduktan sonra yavaşça geri vites
+                self.acceleration -= delta
         if pressed_keys[pg.K_a] or pressed_keys[pg.K_LEFT]:
             self.angle -= delta*self.velocity/10
         elif pressed_keys[pg.K_d] or pressed_keys[pg.K_RIGHT]:
