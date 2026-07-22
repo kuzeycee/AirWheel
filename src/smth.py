@@ -79,7 +79,6 @@ def draw_dashboard(screen, wheel_surface, car, font):
     wheel_pos = (285 - rotated.get_width() // 2, 150 - rotated.get_height() // 2)
     screen.blit(rotated, wheel_pos)
 
-    # gas / brake lights
     gas_on = car.input_state == "gas"
     brake_on = car.input_state == "brake"
     gas_color = (60, 220, 90) if gas_on else (40, 60, 45)
@@ -89,7 +88,6 @@ def draw_dashboard(screen, wheel_surface, car, font):
     screen.blit(font.render("G", True, (0, 0, 0)), (252, 138))
     screen.blit(font.render("F", True, (0, 0, 0)), (252, 152))
 
-    # gear indicator
     speed = abs(car.velocity) * 3.6
     gear = "N" if speed < 1 else "1" if speed < 25 else "2" if speed < 45 else "3"
     screen.blit(font.render(gear, True, (255, 255, 255)), (283, 168))
