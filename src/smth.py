@@ -118,13 +118,11 @@ def draw_dashboard(screen, wheel_surface, car, font):
     draw_pedal(screen, 234, 138, (235, 60, 60), car.input_state == "brake")
     draw_pedal(screen, 250, 138, (70, 220, 100), car.input_state == "gas")
 
-    # steering wheel, rotates the way the player is steering
     wheel_deg = -car.angle * 120
     rotated = pg.transform.rotate(wheel_surface, wheel_deg)
     wheel_pos = (296 - rotated.get_width() // 2, 155 - rotated.get_height() // 2)
     screen.blit(rotated, wheel_pos)
 
-    # gear indicator on a small display
     speed = abs(car.velocity) * 3.6
     gear = "N" if speed < 1 else "1" if speed < 25 else "2" if speed < 45 else "3"
     pg.draw.rect(screen, (10, 30, 15), (270, 137, 12, 12), border_radius=2)
@@ -132,7 +130,8 @@ def draw_dashboard(screen, wheel_surface, car, font):
     screen.blit(font.render(gear, True, (120, 255, 150)), (273, 137))
 
 async def main():
-    screen_size = [320,180]
+    SS = 2  # supersample: dünyayı 2x çözünürlükte çiz -> daha keskin görüntü
+    screen_size = [320*SS, 180*SS]
 
     if sys.platform == "emscripten":
         platform.window.canvas.style.imageRendering = "pixelated"
@@ -148,6 +147,12 @@ async def main():
     car_sprite.set_colorkey((255,0,255))
     tree_texture = pg.image.load(asset_path("tree.png")).convert_alpha()
     grass_texture = pg.image.load(asset_path("grass.png")).convert_alpha()
+
+    # HUD / gösterge paneli / menü bu 320x180 katmana çizilip ekrana ölçeklenir (o sabitleri değiştirmemek için)
+    ui = pg.Surface((320, 180), pg.SRCALPHA)
+    mountains_texture = pg.transform.scale(mountains_texture, (mountains_texture.get_width()*SS, mountains_texture.get_height()*SS))
+    car_big = pg.transform.scale(car_sprite, (car_sprite.get_width()*SS, car_sprite.get_height()*SS))
+    car_big.set_colorkey((255,0,255))
 
     engine_channel = None
     engine_variants = None
@@ -203,7 +208,7 @@ async def main():
                     use_hand_control = False
                 elif event.key == pg.K_2:
                     use_hand_control = True
-        screen.fill((20,20,30))
+        ui.fill((20,20,30,255))
 
         flicker = 0.6 + 0.4*math.sin(time.time()*10) + 0.15*math.sin(time.time()*23.7)
         flicker = max(0.0, min(1.0, flicker))
@@ -213,13 +218,14 @@ async def main():
         title_x = 160 - title_surface.get_width()//2
         for dx, dy in ((-1,0),(1,0),(0,-1),(0,1)):
             glow_surface = title_font.render(title_text, True, (120,20,0))
-            screen.blit(glow_surface, (title_x+dx, 45+dy))
-        screen.blit(title_surface, (title_x, 45))
+            ui.blit(glow_surface, (title_x+dx, 45+dy))
+        ui.blit(title_surface, (title_x, 45))
 
         for i, line in enumerate(["Press 1: Keyboard", "Press 2: Hand steering"]):
             line_surface = hud_font.render(line, True, (255,255,0))
-            screen.blit(line_surface, (160 - line_surface.get_width()//2, 95 + i*15))
+            ui.blit(line_surface, (160 - line_surface.get_width()//2, 95 + i*15))
 
+        screen.blit(pg.transform.smoothscale(ui, screen_size), (0, 0))
         pg.display.update()
         await asyncio.sleep(0)
 
@@ -247,6 +253,8 @@ async def main():
         hand_landmarker = airwheel.create_landmarker()
 
     car = Player()
+    obstacle_x = car.x + 80                    # engel ~80 birim ileride, yolda sabit durur
+    obstacle_lane = random.choice([-1, 0, 1])  # -1 sol, 0 orta, 1 sağ şerit
     running = 1
 
     while running:
@@ -319,34 +327,35 @@ async def main():
             if event.type == pg.QUIT: running = 0
 
         screen.fill((100,150,250))
-        screen.blit(mountains_texture, (-65 - car.angle*82, 0))
-        pg.draw.rect(screen, (55,125,55), (0, 60, 320, 120))
-        vertical, draw_distance= 180, 1
+        screen.blit(mountains_texture, (-65*SS - car.angle*82*SS, 0))
+        pg.draw.rect(screen, (55,125,55), (0, 60*SS, 320*SS, 120*SS))
+        vertical, draw_distance= 180*SS, 1
         car.z = 100+40*math.sin(car.x/13)-60*math.sin(car.x/7)
         roadside_sprites = []
+        obstacle_screen = None  # engelin bu karedeki ekran yeri (yola gelince dolar)
 
         while draw_distance < 120:
             last_vertical = vertical
             while vertical >= last_vertical and draw_distance < 120:
                 draw_distance += draw_distance / 150
                 x = car.x + draw_distance
-                scale = 1 /draw_distance
+                scale = SS /draw_distance   # SS ile ölçek büyür -> tüm *scale boyutları yüksek çözünürlükte
                 z = 100 + 40 * math.sin(x / 13) - 60 * math.sin(x / 7) - car.z
-                vertical = int(60+120*scale + z*scale)
+                vertical = int(60*SS+120*scale + z*scale)
                 if draw_distance < 120:
                     y = 200 * math.sin(x / 1170) + 170 * math.sin(x / 8) - car.y
-                    horizontal = 160 - (160 - y) * scale + car.angle * (vertical-150)
+                    horizontal = 160*SS - (160 - y) * scale + car.angle * (vertical-150*SS)
                     road_slice = road_texture.subsurface((0, (x) % 360, 320, 1))
                     slice_width = max(int(320 * scale), 1)
-                    scaled_slice = pg.transform.scale(road_slice, (500*scale, 1))
+                    scaled_slice = pg.transform.scale(road_slice, (500*scale, SS))
                     color = (int(50 - draw_distance / 3), int(130 - draw_distance), int(50 + 30 * math.sin(x)))
-                    pg.draw.rect(screen, color, (0, vertical, 320, 1))
+                    pg.draw.rect(screen, color, (0, vertical, 320*SS, SS))
                     screen.blit(scaled_slice, (int(horizontal - slice_width / 2), vertical))
 
                     sprite_info = roadside_sprite_at(x)
                     if sprite_info:
                         sprite_texture, side, world_offset, max_height = sprite_info
-                        sprite_scale = min(scale * 14, max_height / sprite_texture.get_height())
+                        sprite_scale = min(scale * 14, max_height * SS / sprite_texture.get_height())
                         if sprite_scale > 0.15:
                             sprite_w = max(int(sprite_texture.get_width() * sprite_scale), 1)
                             sprite_h = max(int(sprite_texture.get_height() * sprite_scale), 1)
@@ -354,23 +363,50 @@ async def main():
                             sprite_x = horizontal + side * world_offset * scale
                             roadside_sprites.append((scaled_sprite, int(sprite_x - sprite_w / 2), int(vertical - sprite_h)))
 
+                    # engel: bu, engeli geçen ilk (en yakın) yol dilimi mi? konumunu kaydet
+                    if obstacle_screen is None and x >= obstacle_x:
+                        obs_w = max(int(120 * scale), 2)
+                        obs_x = horizontal + obstacle_lane * 55 * scale
+                        obstacle_screen = (int(obs_x - obs_w / 2), int(vertical - obs_w), obs_w)
+
+        # yol dışı tespiti: arabanın altındaki noktalar tamamen yeşilse çimdeyiz
+        car.off_road = True
+        for sy in (150*SS, 158*SS, 166*SS):
+            px = screen.get_at((132*SS, sy))
+            if not (px.g > px.r + 25 and px.g > px.b + 25):
+                car.off_road = False
+                break
+
         for scaled_sprite, sprite_left, sprite_top in reversed(roadside_sprites):
             screen.blit(scaled_sprite, (sprite_left, sprite_top))
 
-        screen.blit(car_sprite, (100, 120))
+        if obstacle_screen is not None:
+            obs_left, obs_top, obs_size = obstacle_screen
+            scaled_obstacle = pg.transform.scale(car_sprite, (obs_size, obs_size))
+            scaled_obstacle.set_colorkey((255,0,255))
+            screen.blit(scaled_obstacle, (obs_left, obs_top))
 
+        # engeli geçtiysek (arabanın gerisinde kaldı) ileride yenisini üret
+        if car.x > obstacle_x:
+            obstacle_x = car.x + random.randint(60, 110)
+            obstacle_lane = random.choice([-1, 0, 1])
+
+        screen.blit(car_big, (100*SS, 120*SS))
+
+        ui.fill((0, 0, 0, 0))   # HUD/panel katmanını temizle (şeffaf)
         speed_kmh = int(abs(car.velocity) * 3.6)
         distance_m = int(max(car.x, 0))
         for i, hud_line in enumerate([f"{speed_kmh} km/h", f"{distance_m} m"]):
             hud_surface = hud_font.render(hud_line, True, (255,255,255))
-            screen.blit(hud_surface, (320 - hud_surface.get_width() - 6, 6 + i*14))
+            ui.blit(hud_surface, (320 - hud_surface.get_width() - 6, 6 + i*14))
 
-        draw_dashboard(screen, wheel_surface, car, hud_font)
+        draw_dashboard(ui, wheel_surface, car, hud_font)
 
         if use_hand_control and not hand_calibrated:
             hud_text = "Raise both hands to calibrate steering" if hand_calibration_start is None else "Calibrating... hold straight"
-            screen.blit(hud_font.render(hud_text, True, (255,255,0)), (10, 10))
+            ui.blit(hud_font.render(hud_text, True, (255,255,0)), (10, 10))
 
+        screen.blit(pg.transform.smoothscale(ui, screen_size), (0, 0))
         pg.display.update()
         await asyncio.sleep(0)
 
@@ -387,8 +423,11 @@ class Player():
         self.velocity = 0
         self.acceleration = 0
         self.input_state = "coast"
+        self.off_road = False
 
     def controls(self, delta, hand_throttle=None):
+        if self.off_road:
+            self.velocity += -3.0*self.velocity*delta  # çimde ekstra sürtünme, arabayı yavaşlatır
         if hand_throttle is not None:
             # hand mode: throttle maps straight to acceleration for instant response,
             # and the car never rolls backwards no matter how noisy the signal is.
@@ -424,11 +463,13 @@ class Player():
                 self.acceleration = 0
                 self.velocity += -self.acceleration*delta
         elif pressed_keys[pg.K_s] or pressed_keys[pg.K_DOWN]:
-            if self.velocity > -1:
-                self.acceleration -= delta
-            else:
+            if self.velocity > 0:
                 self.acceleration = 0
-                self.velocity += self.velocity*delta
+                self.velocity += -4*self.velocity*delta - 5*delta  # güçlü fren, hızı sıfıra çeker
+                if self.velocity < 0:
+                    self.velocity = 0
+            else:
+                self.acceleration -= delta  # durduktan sonra yavaşça geri vites
         if pressed_keys[pg.K_a] or pressed_keys[pg.K_LEFT]:
             self.angle -= delta*self.velocity/10
         elif pressed_keys[pg.K_d] or pressed_keys[pg.K_RIGHT]:
