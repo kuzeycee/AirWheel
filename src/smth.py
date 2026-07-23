@@ -82,6 +82,57 @@ def build_wheel_surface(radius=22):
     pg.draw.circle(surface, (230, 120, 120), (center - 1, center - 1), 1)
     return surface
 
+# traffic uses the player's own car, repainted; red stays as the original.
+TRAFFIC_COLORS = [
+    None,             # keep the base red car
+    (55, 95, 200),    # blue
+    (230, 180, 40),   # yellow
+    (225, 225, 230),  # white
+    (45, 45, 52),     # black
+    (60, 170, 110),   # green
+]
+
+CAR_BOTTOM_FRAC = 47 / 64  # where the wheels sit inside the 64x64 sprite
+
+def recolor_car(sprite, target):
+    # repaint the red bodywork of the base car in `target`, keeping its shading,
+    # windows, lights and the magenta colour-key untouched.
+    if target is None:
+        return sprite
+    arr = pg.surfarray.array3d(sprite).astype(np.int16)
+    r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
+    body = (r > g + 25) & (r > b + 25)               # red pixels = the paintwork
+    shade = (r / 255.0)[:, :, None]                  # reuse the red channel as brightness
+    tint = (np.array(target)[None, None, :] * shade).astype(np.int16)
+    out = arr.copy()
+    out[body] = tint[body]
+    new = pg.Surface(sprite.get_size(), 0, sprite)   # match the base sprite's format
+    pg.surfarray.blit_array(new, out.astype(np.uint8))
+    new.set_colorkey((255, 0, 255))
+    return new
+
+def build_front_car(color):
+    # front view of the same car: grille, headlights and windshield, painted in
+    # `color`. Footprint matches car.png (wheels near y47) so it scales the same.
+    body = color if color else (200, 55, 55)
+    def sh(c, f):
+        return tuple(max(0, min(255, int(v * f))) for v in c)
+    s = pg.Surface((64, 64), pg.SRCALPHA)
+    pg.draw.ellipse(s, (0, 0, 0, 90), (13, 43, 38, 8))              # ground shadow
+    for tx in (15, 39):                                            # front tyres
+        pg.draw.rect(s, (25, 25, 28), (tx, 40, 10, 7), border_radius=2)
+    pg.draw.rect(s, body, (17, 20, 30, 25), border_radius=6)       # body
+    pg.draw.rect(s, sh(body, 0.6), (17, 39, 30, 6), border_radius=4)   # bumper / lower shade
+    pg.draw.rect(s, sh(body, 0.85), (20, 13, 24, 16), border_radius=5) # cabin
+    pg.draw.rect(s, (40, 55, 75), (23, 16, 18, 9), border_radius=3)    # windshield
+    pg.draw.rect(s, (95, 120, 150), (24, 17, 16, 3), border_radius=2)  # windshield glare
+    pg.draw.rect(s, sh(body, 1.25), (21, 13, 22, 3), border_radius=2)  # roof highlight
+    pg.draw.rect(s, (30, 30, 34), (26, 33, 12, 5), border_radius=2)    # grille
+    for lx in (19, 39):                                          # headlights
+        pg.draw.rect(s, (255, 235, 170), (lx, 32, 6, 5), border_radius=2)
+        pg.draw.rect(s, (255, 255, 225), (lx + 1, 33, 3, 2))
+    return s
+
 def draw_pedal(screen, x, top, accent, pressed):
     # a foot pedal seen slightly from the side: hinge at the top, a ridged
     # foot-plate below it that dips and lights up when it is pushed.
@@ -130,7 +181,7 @@ def draw_dashboard(screen, wheel_surface, car, font):
     screen.blit(font.render(gear, True, (120, 255, 150)), (273, 137))
 
 async def main():
-    SS = 2
+    SS = 3
     screen_size = [320*SS, 180*SS]
 
     if sys.platform == "emscripten":
@@ -252,8 +303,21 @@ async def main():
         hand_landmarker = airwheel.create_landmarker()
 
     car = Player()
-    obstacle_x = car.x + 80
-    obstacle_lane = random.choice([-1, 0, 1])
+    particles = []
+
+    # slow traffic that shares the road; you gradually overtake it. Each car has
+    # a front and a rear view: far away you see its front, up close its rear.
+    traffic_rears = {c: recolor_car(car_sprite, c) for c in TRAFFIC_COLORS}
+    traffic_fronts = {c: build_front_car(c) for c in TRAFFIC_COLORS}
+    def spawn_traffic(ahead_min, ahead_max):
+        return {
+            "x": car.x + random.uniform(ahead_min, ahead_max),
+            "lane": random.choice([-1, 0, 1]),
+            "speed": random.uniform(1.5, 3.5),
+            "color": random.choice(TRAFFIC_COLORS),
+            "scr": None,
+        }
+    traffic = [spawn_traffic(30, 200) for _ in range(4)]
     running = 1
 
     while running:
@@ -331,7 +395,8 @@ async def main():
         vertical, draw_distance= 180*SS, 1
         car.z = 100+40*math.sin(car.x/13)-60*math.sin(car.x/7)
         roadside_sprites = []
-        obstacle_screen = None
+        for t in traffic:
+            t["scr"] = None
 
         while draw_distance < 120:
             last_vertical = vertical
@@ -362,10 +427,12 @@ async def main():
                             sprite_x = horizontal + side * world_offset * scale
                             roadside_sprites.append((scaled_sprite, int(sprite_x - sprite_w / 2), int(vertical - sprite_h)))
 
-                    if obstacle_screen is None and x >= obstacle_x:
-                        obs_w = max(int(120 * scale), 2)
-                        obs_x = horizontal + obstacle_lane * 55 * scale
-                        obstacle_screen = (int(obs_x - obs_w / 2), int(vertical - obs_w), obs_w)
+                    for t in traffic:
+                        if t["scr"] is None and x >= t["x"]:
+                            tw = min(max(int(110 * scale), 2), 420)
+                            tx_screen = horizontal + t["lane"] * 60 * scale
+                            top = vertical - int(tw * CAR_BOTTOM_FRAC)  # sit the wheels on the road
+                            t["scr"] = (int(tx_screen - tw / 2), top, tw, t["color"], draw_distance)
 
         car.off_road = True
         for sy in (150*SS, 158*SS, 166*SS):
@@ -377,17 +444,76 @@ async def main():
         for scaled_sprite, sprite_left, sprite_top in reversed(roadside_sprites):
             screen.blit(scaled_sprite, (sprite_left, sprite_top))
 
-        if obstacle_screen is not None:
-            obs_left, obs_top, obs_size = obstacle_screen
-            scaled_obstacle = pg.transform.scale(car_sprite, (obs_size, obs_size))
-            scaled_obstacle.set_colorkey((255,0,255))
-            screen.blit(scaled_obstacle, (obs_left, obs_top))
+        # collision: if you fail to dodge an oncoming car, you clip it and lose
+        # most of your speed; that car is then sent back out ahead of you.
+        for t in traffic:
+            gap = t["x"] - car.x
+            if 0 < gap < 5 and t["scr"]:
+                left, top, tw, _c, _dd = t["scr"]
+                if abs((left + tw / 2) - 132*SS) < 0.22 * tw + 40:
+                    car.velocity *= 0.35
+                    t.update(spawn_traffic(150, 240))
 
-        if car.x > obstacle_x:
-            obstacle_x = car.x + random.randint(60, 110)
-            obstacle_lane = random.choice([-1, 0, 1])
+        # draw traffic far-to-near so closer cars overlap the ones behind them
+        for t in sorted(traffic, key=lambda c: c["scr"][4] if c["scr"] else 0, reverse=True):
+            if t["scr"]:
+                left, top, tw, color, dd = t["scr"]
+                views = traffic_fronts if t["x"] > car.x else traffic_rears  # front while approaching, rear once passed
+                screen.blit(pg.transform.scale(views[color], (tw, tw)), (left, top))
 
-        screen.blit(car_big, (100*SS, 120*SS))
+        # oncoming traffic drives toward you; recycle a car once it slips past
+        for t in traffic:
+            t["x"] -= t["speed"] * delta
+            if t["x"] < car.x - 10:
+                t.update(spawn_traffic(150, 240))
+
+        # dust & smoke thrown up from under the car: brown dirt on the grass,
+        # white tyre smoke when you corner hard, faint road dust otherwise.
+        cx, cy = 132*SS, 150*SS  # ground contact point under the car
+        if abs(car.velocity) > 1:
+            corner_hard = abs(car.angle) * abs(car.velocity)
+            spawn_count = 1 + int(car.off_road) + int(corner_hard > 3)
+            for _ in range(spawn_count):
+                if car.off_road:
+                    tint = (150, 120, 80)
+                elif corner_hard > 3:
+                    tint = (200, 200, 205)
+                else:
+                    tint = (120, 120, 125)
+                side = random.choice((-1, 1))
+                particles.append({
+                    "x": cx + side * random.randint(6, 14) * SS,
+                    "y": cy + random.randint(-2, 4) * SS,
+                    "vx": side * random.uniform(0.3, 1.2) * SS,
+                    "vy": random.uniform(1.5, 3.5) * SS + abs(car.velocity) * 0.2,
+                    "r": random.uniform(2, 4) * SS,
+                    "life": 1.0,
+                    "color": tint,
+                })
+        alive = []
+        for p in particles:
+            p["x"] += p["vx"]
+            p["y"] += p["vy"]
+            p["vy"] += 0.3 * SS
+            p["r"] += 0.6 * SS
+            p["life"] -= delta * 1.5
+            if p["life"] > 0:
+                alive.append(p)
+                d = int(p["r"] * 2)
+                puff = pg.Surface((d, d), pg.SRCALPHA)
+                pg.draw.circle(puff, (*p["color"], int(120 * p["life"])),
+                               (int(p["r"]), int(p["r"])), int(p["r"]))
+                screen.blit(puff, (int(p["x"] - p["r"]), int(p["y"] - p["r"])))
+        particles[:] = alive
+
+        # engine/road vibration: the faster you go the more the car shakes,
+        # and it gets rougher the moment you drift onto the grass.
+        speed_ratio = min(abs(car.velocity) / 20, 1.0)
+        shake = (2.0 if car.off_road else 1.0) * speed_ratio * SS
+        now = time.time()
+        bob_x = int(math.sin(now * 43) * shake)
+        bob_y = int(abs(math.sin(now * 51)) * shake)
+        screen.blit(car_big, (100*SS + bob_x, 120*SS + bob_y))
 
         ui.fill((0, 0, 0, 0))
         speed_kmh = int(abs(car.velocity) * 3.6)
