@@ -42,7 +42,3 @@ If steering feels too twitchy or too sluggish, the knobs are at the top of `src/
 - `ENTER_TURN_DEG` / `EXIT_TURN_DEG` — how far you need to tilt to trigger a turn, and how far back to release it. There's a gap between the two on purpose so it doesn't flicker between left/right when you're near the edge.
 - `ANGLE_SMOOTHING` — how much weight new webcam readings get vs the previous smoothed value. Lower it if the angle feels jittery.
 - `CALIBRATION_SECONDS` — how long the calibration hold takes.
-
-## Credit
-
-Inspired by a project I saw from [@jeyy.sh](https://www.instagram.com/jeyy.sh/) on Instagram.
