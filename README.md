@@ -2,7 +2,6 @@
 
 Steer a browser racing game with nothing but your hands in the air, no wheel, no gamepad, just a webcam.
 
-I saw a reel of someone doing this on Instagram and figured it wasn't that hard to build myself, so here it is.
 
 ## How it works
 
